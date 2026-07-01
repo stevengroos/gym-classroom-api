@@ -13,7 +13,7 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Configuración CORS para permitir peticiones desde tu frontend en React
+# Configuración CORS para permitir peticiones desde tu frontend en Reactttt
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], # En producción cambiar por la URL de Vercel (ej. ["https://tu-app.vercel.app"])
