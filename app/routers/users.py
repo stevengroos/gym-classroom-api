@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from dateutil.relativedelta import relativedelta
 
 from app.dependencies import get_db
-from app.models import User, Payment
+from app.models import User, Payment, Routine
 from app.schemas import UserCreate, UserResponse, PaymentCreate, StudentUpdate, PaymentResponse, PasswordUpdate
 from app.dependencies import get_current_trainer, get_current_superadmin, get_current_user
 from app.security import get_password_hash
@@ -29,6 +29,7 @@ def create_student(
         email=user_in.email,
         hashed_password=get_password_hash(user_in.password),
         full_name=user_in.full_name,
+        phone=user_in.phone,
         role="student"
     )
     
@@ -155,6 +156,8 @@ def manage_student(
         student.expiration_date = student_in.expiration_date
     if student_in.default_price is not None:
         student.default_price = student_in.default_price
+    if student_in.phone is not None:       # <-- NUEVO
+        student.phone = student_in.phone   # <-- NUEVO
         
     db.commit()
     db.refresh(student)
@@ -196,37 +199,6 @@ def update_my_password(
 # RUTAS EXCLUSIVAS PARA EL SUPERADMIN
 # ==========================================
 
-# Fíjate que ahora uso UserResponse y UserCreate (que ya tenías importados arriba)
-@router.post("/trainers", response_model=UserResponse)
-def create_trainer(
-    trainer: UserCreate, 
-    db: Session = Depends(get_db), 
-    current_user: User = Depends(get_current_user)
-):
-    # Verificamos que quien intenta crear al entrenador sea el superadmin
-    if current_user.role != "superadmin":
-        raise HTTPException(status_code=403, detail="No tienes permisos de SuperAdmin")
-    
-    # Verificamos si el correo ya existe
-    db_user = db.query(User).filter(User.email == trainer.email).first()
-    if db_user:
-        raise HTTPException(status_code=400, detail="El correo ya está registrado")
-    
-    # Aquí usamos get_password_hash directo porque ya lo tenías importado
-    hashed_password = get_password_hash(trainer.password)
-    
-    new_trainer = User(
-        email=trainer.email,
-        full_name=trainer.full_name,
-        hashed_password=hashed_password,
-        role="trainer", # Forzamos el rol a trainer
-        is_active=True
-    )
-    db.add(new_trainer)
-    db.commit()
-    db.refresh(new_trainer)
-    return new_trainer
-
 @router.get("/trainers")
 def get_all_trainers(
     db: Session = Depends(get_db), 
@@ -235,24 +207,93 @@ def get_all_trainers(
     if current_user.role != "superadmin":
         raise HTTPException(status_code=403, detail="No tienes permisos de SuperAdmin")
     
-    # Buscamos a todos los entrenadores
-    trainers = db.query(User).filter(User.role == "trainer").all()
+    trainers = db.query(User).filter(User.role == "trainer").order_by(User.id.desc()).all()
     
-    # Para cada entrenador, contamos cuántos alumnos tiene asignados
     result = []
     for t in trainers:
-        # ATENCIÓN AQUÍ: La relación correcta para saber los alumnos de un entrenador 
-        # en tu base de datos usa la tabla intermedia "trainer_student", no un "trainer_id" directo.
-        # Por lo tanto, la forma correcta de contarlos es usando la relación 'students' que definiste:
         student_count = len(t.students)
-        
         result.append({
             "id": t.id,
             "full_name": t.full_name,
             "email": t.email,
             "is_active": t.is_active,
             "student_count": student_count,
-            "created_at": t.created_at
+            "created_at": t.created_at,
+            "expiration_date": t.expiration_date
         })
-        
     return result
+
+@router.get("/trainers/{trainer_id}/details")
+def get_trainer_details(trainer_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if current_user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="No tienes permisos")
+        
+    trainer = db.query(User).filter(User.id == trainer_id, User.role == "trainer").first()
+    if not trainer:
+        raise HTTPException(status_code=404, detail="Entrenador no encontrado")
+    
+    routines = db.query(Routine).filter(Routine.trainer_id == trainer_id).all()
+    
+    return {
+        "students": [{"id": s.id, "full_name": s.full_name, "email": s.email, "is_active": s.is_active} for s in trainer.students],
+        "routines": [{"id": r.id, "title": r.title, "day_of_week": r.day_of_week, "is_template": r.is_template} for r in routines]
+    }
+
+@router.put("/trainers/{trainer_id}/toggle")
+def toggle_trainer_status(trainer_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if current_user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="No tienes permisos")
+        
+    trainer = db.query(User).filter(User.id == trainer_id, User.role == "trainer").first()
+    if not trainer:
+        raise HTTPException(status_code=404, detail="Entrenador no encontrado")
+    
+    trainer.is_active = not trainer.is_active
+    db.commit()
+    return {"message": "Estado del entrenador actualizado", "is_active": trainer.is_active}
+
+@router.post("/trainers/{trainer_id}/pay")
+def pay_trainer_subscription(trainer_id: int, payment_in: PaymentCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    if current_user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="No tienes permisos")
+        
+    trainer = db.query(User).filter(User.id == trainer_id, User.role == "trainer").first()
+    if not trainer:
+        raise HTTPException(status_code=404, detail="Entrenador no encontrado")
+    
+    # 1. NUEVO: Guardamos físicamente el registro de pago en el historial global usando tu tabla de pagos
+    # Usamos el id del superadmin en trainer_id o un ID fijo si prefieres, pero registrarlo con el student_id apuntando al entrenador es lo ideal para reutilizar el modelo
+    new_payment = Payment(
+        student_id=trainer.id, # El cliente aquí es el entrenador
+        trainer_id=current_user.id, # El cobrador es el superadmin
+        amount=payment_in.amount,
+        notes=payment_in.notes or "Renovación de Licencia SaaS"
+    )
+    db.add(new_payment)
+
+    # 2. Actualizamos su vigencia
+    now = datetime.now(timezone.utc)
+    if not trainer.expiration_date or trainer.expiration_date < now:
+        base_date = now
+    else:
+        base_date = trainer.expiration_date
+
+    trainer.expiration_date = base_date + relativedelta(months=payment_in.add_months)
+    db.commit()
+    return {"message": "Suscripción renovada con éxito", "new_expiration": trainer.expiration_date}
+
+# NUEVO ENDPOINT: Obtener el historial de pagos de un entrenador específico
+@router.get("/trainers/{trainer_id}/payments", response_model=List[PaymentResponse])
+def get_trainer_payments(
+    trainer_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="No tienes permisos")
+        
+    payments = db.query(Payment).filter(
+        Payment.student_id == trainer_id,
+        Payment.trainer_id == current_user.id
+    ).order_by(Payment.payment_date.desc()).all()
+    return payments

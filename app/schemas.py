@@ -7,12 +7,14 @@ class UserCreate(BaseModel):
     email: EmailStr
     password: str
     full_name: str
+    phone: Optional[str] = None
     role: str # "student" o "trainer"
 
 class UserResponse(BaseModel):
     id: int
     email: EmailStr
     full_name: str
+    phone: Optional[str] = None
     role: str
     # NUEVO: Datos financieros que el frontend necesita mostrar
     expiration_date: Optional[datetime] = None
@@ -73,6 +75,7 @@ class StudentUpdate(BaseModel):
     is_active: Optional[bool] = None
     expiration_date: Optional[datetime] = None
     default_price: Optional[float] = None
+    phone: Optional[str] = None
     
 # Esquema para actualizar contraseñas
 class PasswordUpdate(BaseModel):
