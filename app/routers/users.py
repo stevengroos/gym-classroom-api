@@ -191,3 +191,68 @@ def update_my_password(
     current_user.hashed_password = get_password_hash(pass_in.new_password)
     db.commit()
     return {"message": "Tu contraseña ha sido actualizada"}
+
+# ==========================================
+# RUTAS EXCLUSIVAS PARA EL SUPERADMIN
+# ==========================================
+
+# Fíjate que ahora uso UserResponse y UserCreate (que ya tenías importados arriba)
+@router.post("/trainers", response_model=UserResponse)
+def create_trainer(
+    trainer: UserCreate, 
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    # Verificamos que quien intenta crear al entrenador sea el superadmin
+    if current_user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="No tienes permisos de SuperAdmin")
+    
+    # Verificamos si el correo ya existe
+    db_user = db.query(User).filter(User.email == trainer.email).first()
+    if db_user:
+        raise HTTPException(status_code=400, detail="El correo ya está registrado")
+    
+    # Aquí usamos get_password_hash directo porque ya lo tenías importado
+    hashed_password = get_password_hash(trainer.password)
+    
+    new_trainer = User(
+        email=trainer.email,
+        full_name=trainer.full_name,
+        hashed_password=hashed_password,
+        role="trainer", # Forzamos el rol a trainer
+        is_active=True
+    )
+    db.add(new_trainer)
+    db.commit()
+    db.refresh(new_trainer)
+    return new_trainer
+
+@router.get("/trainers")
+def get_all_trainers(
+    db: Session = Depends(get_db), 
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="No tienes permisos de SuperAdmin")
+    
+    # Buscamos a todos los entrenadores
+    trainers = db.query(User).filter(User.role == "trainer").all()
+    
+    # Para cada entrenador, contamos cuántos alumnos tiene asignados
+    result = []
+    for t in trainers:
+        # ATENCIÓN AQUÍ: La relación correcta para saber los alumnos de un entrenador 
+        # en tu base de datos usa la tabla intermedia "trainer_student", no un "trainer_id" directo.
+        # Por lo tanto, la forma correcta de contarlos es usando la relación 'students' que definiste:
+        student_count = len(t.students)
+        
+        result.append({
+            "id": t.id,
+            "full_name": t.full_name,
+            "email": t.email,
+            "is_active": t.is_active,
+            "student_count": student_count,
+            "created_at": t.created_at
+        })
+        
+    return result

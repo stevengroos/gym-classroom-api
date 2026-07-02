@@ -77,3 +77,16 @@ class StudentUpdate(BaseModel):
 # Esquema para actualizar contraseñas
 class PasswordUpdate(BaseModel):
     new_password: str
+    
+    
+# --- NUEVO: Esquema para el Dashboard del SuperAdmin ---
+class TrainerDashboardResponse(BaseModel):
+    id: int
+    full_name: str
+    email: str
+    is_active: bool
+    student_count: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
