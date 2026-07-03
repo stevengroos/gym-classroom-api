@@ -201,3 +201,42 @@ def get_last_routine_log(
     if last_log and last_log.weights_data:
         return {"weights_data": last_log.weights_data}
     return {"weights_data": {}}
+
+# NUEVO: Endpoint para que el Alumno descargue TODO su historial de cargas desde la BD
+@router.get("/my-logs")
+def get_my_personal_logs(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    logs = db.query(WorkoutLog).filter(
+        WorkoutLog.student_id == current_user.id
+    ).order_by(WorkoutLog.completed_at.desc()).all()
+    
+    result = []
+    for log in logs:
+        if not log.routine or not log.weights_data:
+            continue
+        
+        date_str = log.completed_at.strftime("%d/%m/%Y") if log.completed_at else "Sin fecha"
+        time_str = log.completed_at.strftime("%H:%M") if log.completed_at else ""
+        
+        # Recorremos el JSON de pesos guardado en PostgreSQL
+        for idx_str, weight_val in log.weights_data.items():
+            if not weight_val:
+                continue
+            try:
+                idx = int(idx_str)
+                if idx < len(log.routine.exercises):
+                    ex = log.routine.exercises[idx]
+                    result.append({
+                        "id": f"{log.id}_{idx}",
+                        "date": date_str,
+                        "time": time_str,
+                        "exercise": ex.name,
+                        "weight": str(weight_val),
+                        "reps": ex.reps or "-"
+                    })
+            except (ValueError, IndexError):
+                continue
+                
+    return result
